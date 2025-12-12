@@ -8,6 +8,7 @@ import android.content.Intent
 import android.media.AudioFormat
 import android.media.AudioTrack
 import android.os.IBinder
+import android.os.Process
 import androidx.core.app.NotificationCompat
 import java.net.DatagramPacket
 import java.net.DatagramSocket
@@ -20,9 +21,7 @@ class AudioReceiverService : Service() {
         createChannel()
         val openIntent = Intent(this, MainActivity::class.java)
         val pendingIntent = PendingIntent.getActivity(
-            this,
-            0,
-            openIntent,
+            this, 0, openIntent,
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
         val notif = NotificationCompat.Builder(this, "audio_receiver")
@@ -46,7 +45,7 @@ class AudioReceiverService : Service() {
         super.onDestroy()
     }
 
-    override fun onBind(intent: Intent?): IBinder? = null
+    override fun onBind(intent: Intent?) = null
 
     private fun createChannel() {
         val ch = NotificationChannel(
@@ -54,13 +53,13 @@ class AudioReceiverService : Service() {
             "Audio Receiver",
             NotificationManager.IMPORTANCE_LOW
         )
-        val nm = getSystemService(NotificationManager::class.java)
-        nm.createNotificationChannel(ch)
+        getSystemService(NotificationManager::class.java).createNotificationChannel(ch)
     }
 
     private fun startReceiver() {
         thread = object : Thread() {
             override fun run() {
+                Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO)
                 val opus = Opus()
                 opus.decoderInit(Constants.SampleRate._48000(), Constants.Channels.stereo())
                 val socket = DatagramSocket(8888)
@@ -85,23 +84,23 @@ class AudioReceiverService : Service() {
                 var next = System.nanoTime()
                 try {
                     while (!interrupted()) {
-                        while (queue.size < 2) {
+                        if (queue.size < 2) {
                             socket.receive(packet)
                             queue.add(buf.copyOf(packet.length))
+                            continue
                         }
                         val now = System.nanoTime()
-                        if (now < next) continue
+                        val diff = next - now
+                        if (diff > 0) {
+                            sleep(diff / 1_000_000, (diff % 1_000_000).toInt())
+                        }
+
                         next += frameNs
                         if (next < now - 500_000) next = now
                         val frame = queue.removeFirstOrNull() ?: continue
                         val decoded = opus.decode(frame, Constants.FrameSize._120()) ?: continue
                         val pcm = opus.convert(decoded) ?: continue
-                        audioTrack.write(
-                            pcm,
-                            0,
-                            pcm.size,
-                            AudioTrack.WRITE_NON_BLOCKING
-                        )
+                        audioTrack.write(pcm, 0, pcm.size)
                     }
                 } finally {
                     audioTrack.stop()

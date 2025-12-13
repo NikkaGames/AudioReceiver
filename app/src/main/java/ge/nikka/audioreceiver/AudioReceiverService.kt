@@ -15,6 +15,7 @@ import java.net.DatagramSocket
 
 class AudioReceiverService : Service() {
     private var thread: Thread? = null
+    private var socket: DatagramSocket? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -40,6 +41,7 @@ class AudioReceiverService : Service() {
     }
 
     override fun onDestroy() {
+        socket?.close()
         thread?.interrupt()
         thread = null
         super.onDestroy()
@@ -62,8 +64,8 @@ class AudioReceiverService : Service() {
                 Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO)
                 val opus = Opus()
                 opus.decoderInit(Constants.SampleRate._48000(), Constants.Channels.stereo())
-                val socket = DatagramSocket(8888)
-                socket.receiveBufferSize = 65536
+                socket = DatagramSocket(8888)
+                socket?.receiveBufferSize = 65536
                 val audioTrack = AudioTrack.Builder()
                     .setAudioFormat(
                         AudioFormat.Builder()
@@ -85,16 +87,23 @@ class AudioReceiverService : Service() {
                 try {
                     while (!interrupted()) {
                         if (queue.size < 2) {
-                            socket.receive(packet)
+                            try {
+                                socket?.receive(packet)
+                            } catch (_: Exception) {
+                                break
+                            }
                             queue.add(buf.copyOf(packet.length))
                             continue
                         }
                         val now = System.nanoTime()
                         val diff = next - now
                         if (diff > 0) {
-                            sleep(diff / 1_000_000, (diff % 1_000_000).toInt())
+                            try {
+                                sleep(diff / 1_000_000, (diff % 1_000_000).toInt())
+                            } catch (_: InterruptedException) {
+                                break
+                            }
                         }
-
                         next += frameNs
                         if (next < now - 500_000) next = now
                         val frame = queue.removeFirstOrNull() ?: continue
@@ -106,10 +115,10 @@ class AudioReceiverService : Service() {
                     audioTrack.stop()
                     audioTrack.release()
                     opus.decoderRelease()
-                    socket.close()
+                    socket?.close()
                 }
             }
         }
-        thread!!.start()
+        thread?.start()
     }
 }
